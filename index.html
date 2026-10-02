@@ -528,7 +528,10 @@ function productCard(p) {
       <div class="sub">${esc(catLabel(p.category))}${(p.colors || []).length > 1 ? ` · ${p.colors.length} colours` : ""}</div>
     </a></div>`;
 }
-function loadingBlock(msg = "Loading the collection…") { return `<div class="empty"><p>${msg}</p></div>`; }
+function loadingBlock(msg = "Loading the collection…") {
+  if (S.dbMissing) msg = "The collection couldn't load. Refresh the page to try again.";
+  return `<div class="empty"><p>${msg}</p></div>`;
+}
 function uspRow() {
   const st = S.settings;
   const icon = d => `<svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.4">${d}</svg>`;
@@ -1207,7 +1210,6 @@ function render() {
   else if (h.startsWith("order-")) html = vOrderDone(h.slice(6));
   else if (h === "account") html = vAccount();
   else html = vHome();
-  if (S.dbMissing && !isAdminRoute && !S.products.length) html = `<div class="empty"><p>The catalogue opens inside Claude, signed in.</p></div>` + html;
   $("#main").innerHTML = html;
   document.querySelectorAll("[data-nav]").forEach(a => a.classList.toggle("on", h === a.dataset.nav));
   wireChart();
@@ -1387,15 +1389,19 @@ async function exportCSV(filename, rows) {
 /* ============ Boot ============ */
 async function boot() {
   saveLocal(); applyBrand(); render();
-  const c = window.claude;
-  if (!c || !c.use) { S.dbMissing = true; S.ready = true; S.loaded.products = true; render(); return; }
+  const c = await new Promise(res => {
+    // The viewer attaches window.claude shortly after the page starts; wait for it.
+    const t0 = Date.now();
+    (function poll() { if (window.claude?.use) return res(window.claude); if (Date.now() - t0 > 10000) return res(null); setTimeout(poll, 50); })();
+  });
+  if (!c) { S.dbMissing = true; S.ready = true; render(); return; }
   const [db, user, downloads] = await Promise.all([c.use("db"), c.use("user"), c.use("downloads")]);
   S.db = db; S.user = user; S.downloads = downloads;
   S.isAdmin = user ? await user.canEdit() : false;
   S.uid = user ? await user.id() : null;
   if (S.isAdmin) S.assets = await c.use("assets");
   S.ready = true;
-  if (!db) { S.dbMissing = true; S.loaded.products = true; refresh(); return; }
+  if (!db) { S.dbMissing = true; refresh(); return; }
   const onErr = () => {};
   db.collection("products").onSnapshot(s => { S.products = s.docs.map(d => ({ id: d.id, ...d.data() })); S.loaded.products = true; refresh(); }, onErr);
   db.doc("store/settings").onSnapshot(s => { S.settings = { ...DEFAULT_SETTINGS, ...(s.exists ? s.data() : {}) }; refresh(); }, onErr);
